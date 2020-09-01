@@ -1,0 +1,6 @@
+services:
+  woldtwerk_theme_helper.filter:
+    arguments: ['@renderer']
+    class: Drupal\woldtwerk_theme_helper\TwigExtension\TwigExtension
+    tags:
+      - { name: twig.extension }
