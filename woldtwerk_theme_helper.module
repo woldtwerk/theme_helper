@@ -11,6 +11,9 @@ use Drupal\Core\Entity\EntityInterface;
 use Drupal\Core\Entity\EntityTypeInterface;
 use Drupal\Core\Session\AccountInterface;
 use Drupal\Core\Access\AccessResult;
+use Drupal\image\Entity\ImageStyle;
+use Drupal\responsive_image\Entity\ResponsiveImageStyle;
+use Drupal\Core\Logger\RfcLogLevel;
 
 /**
  * Implements hook_ENTITY_TYPE_access().
@@ -50,4 +53,70 @@ function woldtwerk_theme_helper_jsonapi_menu_link_content_filter_access(EntityTy
   return ([
     JSONAPI_FILTER_AMONG_ALL => AccessResult::allowed(),
   ]);
+}
+
+/**
+ * Implements template_preprocess_responsive_image().
+ */
+function woldtwerk_preprocess_responsive_image(&$variables) {
+  $responsive_image_style = ResponsiveImageStyle::load($variables['responsive_image_style_id']);
+
+  // If a responsive image style is not selected, log the error and stop
+  // execution.
+  if (!$responsive_image_style) {
+    $variables['img_element'] = [];
+    \Drupal::logger('responsive_image')->log(RfcLogLevel::ERROR, 'Failed to load responsive image style: “@style“ while displaying responsive image.', ['@style' => $variables['responsive_image_style_id']]);
+    return;
+  }
+
+  $breakpoints = \Drupal::service('breakpoint.manager')->getBreakpointsByGroup($responsive_image_style->getBreakpointGroup());
+  $style = '';
+  $uuid = 'ris-' . \Drupal::service('uuid')->generate();
+
+  foreach (array_reverse($responsive_image_style->getKeyedImageStyleMappings()) as $breakpoint_id => $multipliers) {
+    if (isset($breakpoints[$breakpoint_id])) {
+      if ((empty($variables['width']) || empty($variables['height']))) {
+        $image = \Drupal::service('image.factory')->get($variables['uri']);
+        $width = $image->getWidth();
+        $height = $image->getHeight();
+      }
+      else {
+        $width = $variables['width'];
+        $height = $variables['height'];
+      }
+      foreach ($multipliers as $multiplier => $image_style_mapping) {
+        switch ($image_style_mapping['image_mapping_type']) {
+          case 'sizes':
+            $image_style_name = $image_style_mapping['image_mapping']['sizes_image_styles'][0];
+            $dimensions = responsive_image_get_image_dimensions($image_style_name, ['width' => $width, 'height' => $height], $variables['uri']);
+
+        }
+      }
+      $media_query = trim($breakpoints[$breakpoint_id]->getMediaQuery());
+      $aspect_ratio = round($dimensions['height'] / $dimensions['width'] * 100, 2);
+      $style .= '
+        @media ' . $media_query . ' {
+          #' . $uuid . '{
+            padding-bottom:' . $aspect_ratio . '%;
+          };
+        }';
+    }
+
+    $variables['responsive_image_style'] = [
+      'uuid' => $uuid,
+      'style' => trim($style),
+    ];
+
+    $variables['img_element']['#attributes']['loading'] = 'lazy';
+    $variables['img_element']['#attributes']['style'] = 'width: 100%; height: 100%;';
+  }
+
+  // $fallback_image_style_name = $responsive_image_style['fallback_image_style'];
+  $fallback_image_style = ImageStyle::load($responsive_image_style->getFallbackImageStyle());
+  $fallback_image_uri = $fallback_image_style->buildUri($variables['uri']);
+  $image = \Drupal::service('image.factory')->get($variables['uri']);
+  $image_file = file_get_contents($fallback_image_uri);
+  $image_type = $image->getMimeType();
+  $base_64_image = base64_encode($image_file);
+  $variables['base_64_data'] = "data:$image_type;base64,$base_64_image";
 }
